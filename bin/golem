@@ -109,6 +109,7 @@ SYNC COMMANDS:
     pr                    Create PR for current ticket
 
 OTHER:
+    install               Install/update golem globally
     config                Show current configuration
     doctor                Diagnose setup issues
     init                  Initialize golem in current project
@@ -492,6 +493,70 @@ Branch: $branch" \
   success "PR created"
 }
 
+cmd_install() {
+  print_banner
+  info "Installing/updating golem..."
+
+  local src_dir="$GOLEM_HOME/src"
+
+  # Clone or update
+  if [[ -d "$src_dir/.git" ]]; then
+    info "Updating existing installation..."
+    git -C "$src_dir" pull --ff-only || die "Failed to update. Try: rm -rf $src_dir"
+  else
+    info "Cloning golem..."
+    mkdir -p "$GOLEM_HOME"
+    git clone https://github.com/daresTheDevil/golem.git "$src_dir" || die "Failed to clone"
+  fi
+
+  # Build
+  info "Building..."
+  cd "$src_dir"
+  pnpm install --silent || die "pnpm install failed"
+  pnpm build || die "Build failed"
+
+  # Copy assets
+  info "Installing assets..."
+  mkdir -p "$GOLEM_HOME"/{commands,agents,prompts}
+  cp -r "$src_dir/commands/golem" "$GOLEM_HOME/commands/"
+  cp "$src_dir/golem/agents/"*.md "$GOLEM_HOME/agents/"
+  cp "$src_dir/golem/prompts/"*.md "$GOLEM_HOME/prompts/"
+
+  # Link binaries
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$src_dir/bin/golem" "$HOME/.local/bin/golem"
+  ln -sf "$src_dir/dist/cli/index.js" "$HOME/.local/bin/golem-api"
+  chmod +x "$src_dir/dist/cli/index.js"
+
+  # Link Claude commands
+  mkdir -p "$HOME/.claude/commands"
+  ln -sf "$GOLEM_HOME/commands/golem" "$HOME/.claude/commands/golem" 2>/dev/null || true
+
+  # Create env template if needed
+  if [[ ! -f "$GOLEM_HOME/.env" ]]; then
+    cat > "$GOLEM_HOME/.env" << 'ENVEOF'
+# Freshservice
+FRESH_DOMAIN=yourcompany.freshservice.com
+FRESH_API_KEY=your_api_key
+
+# Gitea
+GITEA_URL=https://gitea.example.com
+GITEA_TOKEN=your_token
+GITEA_ORG=your-org
+GITEA_REPO=default-repo
+ENVEOF
+    warn "Created $GOLEM_HOME/.env - edit with your credentials"
+  fi
+
+  echo ""
+  success "Installation complete!"
+  echo ""
+  echo "Make sure ~/.local/bin is in your PATH:"
+  echo '  export PATH="$HOME/.local/bin:$PATH"'
+  echo ""
+  echo "Then run: golem doctor"
+}
+
 cmd_config() {
   print_banner
   load_env
@@ -761,6 +826,9 @@ main() {
       ;;
     doctor)
       cmd_doctor "$@"
+      ;;
+    install)
+      cmd_install "$@"
       ;;
     *)
       die "Unknown command: $cmd. Run 'golem help' for usage."
