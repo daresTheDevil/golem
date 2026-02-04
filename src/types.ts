@@ -79,6 +79,7 @@ export interface FreshTicketCreatePayload {
   description: string;
   priority?: 1 | 2 | 3 | 4;
   status?: number;
+  source?: number;
   email?: string;
   requester_id?: number;
   group_id?: number;

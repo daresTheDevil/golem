@@ -64,10 +64,16 @@ export async function createLinkedTicket(
   const { fresh, gitea, ticketsDir, repo } = ctx;
 
   // 1. Create Fresh ticket first (gets the ID)
+  // Required fields from Freshservice: status, group_id, category, email/requester_id, source
   const freshTicket = await fresh.createTicket({
     subject: params.subject,
     description: params.description,
     priority: params.priority || 3,
+    status: 2, // Open
+    source: parseInt(process.env.FRESH_SOURCE_ID || '1002'), // ACE (API)
+    group_id: parseInt(process.env.FRESH_DEFAULT_GROUP_ID || '38000120203'),
+    category: process.env.FRESH_DEFAULT_CATEGORY || 'Applications',
+    email: process.env.FRESH_DEFAULT_EMAIL || 'ace-bot@pearlriverresort.com',
   });
 
   const ticketId = FreshworksClient.formatTicketId(freshTicket.id);
