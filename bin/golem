@@ -58,10 +58,24 @@ dim() {
   echo -e "${DIM}$1${NC}"
 }
 
-# Load environment from multiple locations
+# Load environment from multiple locations (safely handles special chars)
 load_env() {
-  [[ -f "$GOLEM_HOME/.env" ]] && source "$GOLEM_HOME/.env" || true
-  [[ -f ".env" ]] && source ".env" || true
+  local env_file
+  for env_file in "$GOLEM_HOME/.env" ".env"; do
+    if [[ -f "$env_file" ]]; then
+      while IFS='=' read -r key value; do
+        # Skip comments and empty lines
+        [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+        # Remove leading/trailing whitespace from key
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        # Skip if not a valid variable name
+        [[ ! "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] && continue
+        # Export the variable (value keeps quotes if present)
+        export "$key=$value"
+      done < "$env_file"
+    fi
+  done
 }
 
 # Check if golem-api is available
