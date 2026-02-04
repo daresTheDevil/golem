@@ -1,0 +1,39 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - uses: pnpm/action-setup@v2
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build
+        run: pnpm build
+
+      - name: Sync package.json version from git tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "Setting version to $VERSION"
+          npm version $VERSION --no-git-tag-version --allow-same-version
+
+      - name: Publish to npm
+        run: npm publish --access public --provenance

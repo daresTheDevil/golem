@@ -1,6 +1,6 @@
 {
-  "name": "golem",
-  "version": "0.1.0",
+  "name": "golem-cc",
+  "version": "1.0.0",
   "description": "Personal agentic workflow: Freshworks ↔ Gitea ↔ Local development",
   "type": "module",
   "bin": {
