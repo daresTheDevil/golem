@@ -1,0 +1,547 @@
+#!/usr/bin/env bash
+#
+# golem - Personal agentic workflow manager
+#
+# Integrates Freshworks tickets, Gitea issues, and Claude Code
+# for a unified development workflow.
+#
+
+set -euo pipefail
+
+VERSION="0.1.0"
+GOLEM_HOME="${GOLEM_HOME:-$HOME/.golem}"
+GOLEM_API="golem-api"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+DIM='\033[0;90m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+# ============================================================================
+# Helpers
+# ============================================================================
+
+print_banner() {
+  echo -e "${CYAN}"
+  echo "   ██████╗  ██████╗ ██╗     ███████╗███╗   ███╗"
+  echo "  ██╔════╝ ██╔═══██╗██║     ██╔════╝████╗ ████║"
+  echo "  ██║  ███╗██║   ██║██║     █████╗  ██╔████╔██║"
+  echo "  ██║   ██║██║   ██║██║     ██╔══╝  ██║╚██╔╝██║"
+  echo "  ╚██████╔╝╚██████╔╝███████╗███████╗██║ ╚═╝ ██║"
+  echo "   ╚═════╝  ╚═════╝ ╚══════╝╚══════╝╚═╝     ╚═╝"
+  echo -e "${NC}"
+}
+
+die() {
+  echo -e "${RED}Error:${NC} $1" >&2
+  exit 1
+}
+
+info() {
+  echo -e "${BLUE}→${NC} $1"
+}
+
+success() {
+  echo -e "${GREEN}✓${NC} $1"
+}
+
+warn() {
+  echo -e "${YELLOW}!${NC} $1"
+}
+
+dim() {
+  echo -e "${DIM}$1${NC}"
+}
+
+# Load environment from multiple locations
+load_env() {
+  [[ -f "$GOLEM_HOME/.env" ]] && source "$GOLEM_HOME/.env"
+  [[ -f ".env" ]] && source ".env"
+}
+
+# Check if golem-api is available
+check_api() {
+  if ! command -v "$GOLEM_API" &>/dev/null; then
+    die "golem-api not found. Run 'pnpm build' in golem directory first."
+  fi
+}
+
+# Get current ticket ID from worktree path
+get_current_ticket() {
+  local branch
+  branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  echo "$branch" | grep -oE '(INC|SR)-[0-9]+' || echo ""
+}
+
+# ============================================================================
+# Commands
+# ============================================================================
+
+cmd_help() {
+  print_banner
+  cat << 'EOF'
+USAGE:
+    golem <command> [options]
+
+TICKET COMMANDS:
+    new <subject>         Create new ticket in Fresh + Gitea
+    import <INC-XXXX>     Import existing Fresh ticket
+    list                  List all tracked tickets
+    status [ticket]       Show ticket status
+
+WORKTREE COMMANDS:
+    worktree [ticket]     Create/switch to worktree for ticket
+    worktrees             List all worktrees
+
+BUILD COMMANDS:
+    build                 Run autonomous build loop (spawns Claude)
+    plan                  Generate implementation plan
+    simplify [files]      Run code simplifier
+    squash                Squash current stage commits
+
+SYNC COMMANDS:
+    sync                  Sync ticket status to Fresh/Gitea
+    pr                    Create PR for current ticket
+
+OTHER:
+    init                  Initialize golem in current project
+    version               Show version
+    help                  Show this help
+
+CLAUDE COMMANDS (inside Claude Code):
+    /golem:spec           Define specs interactively
+    /golem:plan           Create implementation plan
+    /golem:build          Run build loop (one task at a time)
+    /golem:simplify       Run code simplifier
+    /golem:status         Show current status
+    /golem:help           Show help
+
+EOF
+}
+
+cmd_version() {
+  print_banner
+  echo "  v$VERSION"
+}
+
+cmd_init() {
+  print_banner
+  info "Initializing golem..."
+
+  mkdir -p .golem/{specs,tickets,worktrees}
+
+  if [[ ! -f .golem/AGENTS.md ]]; then
+    cat > .golem/AGENTS.md << 'EOF'
+# Operational Guide
+
+## Commands
+
+### Testing
+```bash
+pnpm test
+```
+
+### Type Checking
+```bash
+pnpm typecheck
+```
+
+### Linting
+```bash
+pnpm lint
+```
+
+## Learnings
+<!-- Updated during build iterations -->
+EOF
+    success "Created .golem/AGENTS.md"
+  fi
+
+  # Link commands to Claude
+  mkdir -p .claude/commands
+  if [[ -d "$GOLEM_HOME/commands/golem" ]]; then
+    ln -sf "$GOLEM_HOME/commands/golem" .claude/commands/golem 2>/dev/null || true
+    success "Linked Claude commands"
+  fi
+
+  # Add .golem to .gitignore
+  if [[ -f .gitignore ]]; then
+    if ! grep -q "^\.golem/worktrees" .gitignore 2>/dev/null; then
+      echo -e "\n# Golem worktrees\n.golem/worktrees/" >> .gitignore
+      success "Updated .gitignore"
+    fi
+  fi
+
+  success "Golem initialized"
+}
+
+cmd_new() {
+  local subject="${1:-}"
+  [[ -z "$subject" ]] && die "Usage: golem new <subject>"
+
+  print_banner
+  check_api
+  load_env
+
+  local repo="${GITEA_REPO:-}"
+  [[ -z "$repo" ]] && die "GITEA_REPO not set"
+
+  echo -e "${BOLD}Creating new ticket${NC}"
+  echo ""
+
+  read -p "Type (feat/fix/refactor/docs/test/chore) [fix]: " type
+  type="${type:-fix}"
+
+  read -p "Slug (for branch name): " slug
+  [[ -z "$slug" ]] && die "Slug required"
+
+  read -p "Description (optional): " description
+  description="${description:-$subject}"
+
+  read -p "Priority (1=Urgent, 2=High, 3=Medium, 4=Low) [3]: " priority
+  priority="${priority:-3}"
+
+  info "Creating ticket..."
+  $GOLEM_API ticket:new \
+    --subject "$subject" \
+    --description "$description" \
+    --type "$type" \
+    --slug "$slug" \
+    --priority "$priority" \
+    --repo "$repo"
+}
+
+cmd_import() {
+  local ticket_id="${1:-}"
+  [[ -z "$ticket_id" ]] && die "Usage: golem import <INC-XXXX>"
+
+  print_banner
+  check_api
+  load_env
+
+  local repo="${GITEA_REPO:-}"
+  [[ -z "$repo" ]] && die "GITEA_REPO not set"
+
+  echo -e "${BOLD}Importing ticket $ticket_id${NC}"
+  echo ""
+
+  read -p "Type (feat/fix/refactor/docs/test/chore) [fix]: " type
+  type="${type:-fix}"
+
+  read -p "Slug (for branch name): " slug
+  [[ -z "$slug" ]] && die "Slug required"
+
+  info "Importing..."
+  $GOLEM_API ticket:import "$ticket_id" \
+    --type "$type" \
+    --slug "$slug" \
+    --repo "$repo"
+}
+
+cmd_list() {
+  check_api
+  load_env
+  $GOLEM_API ticket:list
+}
+
+cmd_status() {
+  local ticket_id="${1:-$(get_current_ticket)}"
+
+  print_banner
+
+  if [[ -z "$ticket_id" ]]; then
+    # Show general status
+    echo -e "${BOLD}Status${NC}"
+    echo ""
+
+    if [[ -d .golem ]]; then
+      local spec_count=$(ls .golem/specs/*.md 2>/dev/null | wc -l | tr -d ' ')
+      echo "Specs: $spec_count"
+
+      if [[ -f .golem/IMPLEMENTATION_PLAN.md ]]; then
+        local total=$(grep -c '^\- \[' .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo 0)
+        local done=$(grep -c '^\- \[x\]' .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo 0)
+        echo "Tasks: $done / $total"
+      else
+        dim "No implementation plan"
+      fi
+    else
+      warn "Not a golem project. Run 'golem init'"
+    fi
+  else
+    check_api
+    load_env
+    $GOLEM_API ticket:get "$ticket_id"
+  fi
+}
+
+cmd_worktree() {
+  local ticket_id="${1:-$(get_current_ticket)}"
+  [[ -z "$ticket_id" ]] && die "Usage: golem worktree <INC-XXXX> or run from ticket branch"
+
+  check_api
+  load_env
+
+  info "Creating worktree for $ticket_id..."
+  local path
+  path=$($GOLEM_API worktree:create "$ticket_id" | tail -1)
+
+  success "Worktree created at $path"
+  echo ""
+  echo "To switch to it:"
+  echo "  cd $path"
+}
+
+cmd_worktrees() {
+  check_api
+  $GOLEM_API worktree:list
+}
+
+cmd_build() {
+  local ticket_id
+  ticket_id=$(get_current_ticket)
+
+  print_banner
+
+  [[ -z "$ticket_id" ]] && warn "Not in a ticket worktree"
+
+  if [[ ! -f .golem/IMPLEMENTATION_PLAN.md ]]; then
+    die "No implementation plan. Run /golem:plan in Claude first."
+  fi
+
+  local remaining
+  remaining=$(grep -c '^\- \[ \]' .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo 0)
+
+  if [[ "$remaining" -eq 0 ]]; then
+    success "All tasks complete!"
+    return 0
+  fi
+
+  info "Starting build loop ($remaining tasks remaining)"
+  echo ""
+
+  read -p "Continue? [y/N] " confirm
+  [[ "$confirm" != "y" && "$confirm" != "Y" ]] && exit 0
+
+  # Build the prompt from the build command file
+  local build_prompt
+  build_prompt=$(cat "$GOLEM_HOME/prompts/PROMPT_build.md")
+
+  # Loop until done
+  while true; do
+    remaining=$(grep -c '^\- \[ \]' .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo 0)
+
+    if [[ "$remaining" -eq 0 ]]; then
+      success "All tasks complete!"
+      break
+    fi
+
+    info "Tasks remaining: $remaining"
+    info "Running Claude (print mode)..."
+    echo ""
+
+    # Run Claude in print mode with the build prompt
+    # --dangerously-skip-permissions allows tool use without confirmation
+    claude -p "$build_prompt" --dangerously-skip-permissions || true
+
+    echo ""
+    read -p "Continue to next task? [Y/n] " continue_choice
+    [[ "$continue_choice" == "n" || "$continue_choice" == "N" ]] && break
+  done
+}
+
+cmd_plan() {
+  print_banner
+
+  if [[ ! -d .golem/specs ]] || [[ -z "$(ls .golem/specs/*.md 2>/dev/null)" ]]; then
+    die "No specs found. Run /golem:spec in Claude first."
+  fi
+
+  info "Running Claude to generate plan..."
+
+  local plan_prompt
+  plan_prompt=$(cat "$GOLEM_HOME/prompts/PROMPT_plan.md")
+
+  claude -p "$plan_prompt" --dangerously-skip-permissions
+}
+
+cmd_simplify() {
+  print_banner
+
+  local files="${*:-}"
+
+  info "Running code simplifier..."
+
+  local simplify_prompt
+  simplify_prompt=$(cat "$GOLEM_HOME/agents/code-simplifier.md")
+
+  if [[ -n "$files" ]]; then
+    simplify_prompt="$simplify_prompt
+
+Files to simplify: $files"
+  fi
+
+  claude -p "$simplify_prompt" --dangerously-skip-permissions
+}
+
+cmd_squash() {
+  local ticket_id
+  ticket_id=$(get_current_ticket)
+  [[ -z "$ticket_id" ]] && die "Not in a ticket worktree"
+
+  check_api
+  load_env
+
+  # Find current stage commit message from plan
+  if [[ ! -f .golem/IMPLEMENTATION_PLAN.md ]]; then
+    die "No implementation plan found"
+  fi
+
+  # Get the commit message for current stage (simplified - just prompt user)
+  echo -e "${BOLD}Squashing commits for $ticket_id${NC}"
+  echo ""
+
+  local commits
+  commits=$(git log --oneline origin/main..HEAD 2>/dev/null | wc -l | tr -d ' ')
+  echo "Commits to squash: $commits"
+
+  if [[ "$commits" -eq 0 ]]; then
+    warn "No commits to squash"
+    return 0
+  fi
+
+  echo ""
+  read -p "Commit message: " message
+  [[ -z "$message" ]] && die "Commit message required"
+
+  info "Squashing..."
+  $GOLEM_API git:squash "$ticket_id" -m "$message"
+
+  success "Squashed to single commit"
+}
+
+cmd_sync() {
+  local ticket_id
+  ticket_id=$(get_current_ticket)
+  [[ -z "$ticket_id" ]] && die "Not in a ticket worktree"
+
+  check_api
+  load_env
+
+  local repo="${GITEA_REPO:-}"
+  [[ -z "$repo" ]] && die "GITEA_REPO not set"
+
+  read -p "Status (new/spec/planning/in-progress/review/done/blocked): " status
+  read -p "Note (optional): " note
+
+  info "Syncing..."
+  $GOLEM_API ticket:status "$ticket_id" "$status" --repo "$repo" ${note:+--note "$note"}
+}
+
+cmd_pr() {
+  local ticket_id
+  ticket_id=$(get_current_ticket)
+  [[ -z "$ticket_id" ]] && die "Not in a ticket worktree"
+
+  check_api
+  load_env
+
+  # Push branch first
+  info "Pushing branch..."
+  $GOLEM_API git:push "$ticket_id"
+
+  # Get ticket info for PR title/body
+  local ticket_json
+  ticket_json=$($GOLEM_API ticket:get "$ticket_id" 2>/dev/null)
+
+  local subject
+  subject=$(echo "$ticket_json" | grep -o '"subject":"[^"]*"' | cut -d'"' -f4 || echo "$ticket_id")
+
+  local branch
+  branch=$(git rev-parse --abbrev-ref HEAD)
+
+  info "Creating PR..."
+
+  # Use gh CLI
+  gh pr create \
+    --title "[$ticket_id] $subject" \
+    --body "Closes Gitea issue.
+
+---
+Ticket: $ticket_id
+Branch: $branch" \
+    --head "$branch"
+
+  # Update status
+  local repo="${GITEA_REPO:-}"
+  [[ -n "$repo" ]] && $GOLEM_API ticket:status "$ticket_id" "review" --repo "$repo" --note "PR created"
+
+  success "PR created"
+}
+
+# ============================================================================
+# Main
+# ============================================================================
+
+main() {
+  local cmd="${1:-help}"
+  shift || true
+
+  case "$cmd" in
+    help|--help|-h)
+      cmd_help
+      ;;
+    version|--version|-v)
+      cmd_version
+      ;;
+    init)
+      cmd_init "$@"
+      ;;
+    new)
+      cmd_new "$@"
+      ;;
+    import)
+      cmd_import "$@"
+      ;;
+    list)
+      cmd_list "$@"
+      ;;
+    status)
+      cmd_status "$@"
+      ;;
+    worktree)
+      cmd_worktree "$@"
+      ;;
+    worktrees)
+      cmd_worktrees "$@"
+      ;;
+    build)
+      cmd_build "$@"
+      ;;
+    plan)
+      cmd_plan "$@"
+      ;;
+    simplify)
+      cmd_simplify "$@"
+      ;;
+    squash)
+      cmd_squash "$@"
+      ;;
+    sync)
+      cmd_sync "$@"
+      ;;
+    pr)
+      cmd_pr "$@"
+      ;;
+    *)
+      die "Unknown command: $cmd. Run 'golem help' for usage."
+      ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,19 @@
+# Environment
+.env
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Claude/Golem local state
+.golem/worktrees/
+.golem/tickets/
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
