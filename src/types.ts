@@ -82,9 +82,11 @@ export interface FreshTicketCreatePayload {
   source?: number;
   email?: string;
   requester_id?: number;
+  responder_id?: number;
   group_id?: number;
   category?: string;
   sub_category?: string;
+  resolution_notes?: string;
   custom_fields?: Record<string, unknown>;
 }
 

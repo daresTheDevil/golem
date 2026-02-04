@@ -92,6 +92,14 @@ export class FreshworksClient {
   }
 
   /**
+   * Get current agent info
+   */
+  async getCurrentAgent(): Promise<{ id: number; email: string }> {
+    const result = await this.request<{ agent: { id: number; email: string } }>('GET', '/agents/me');
+    return result.agent;
+  }
+
+  /**
    * Add a note to a ticket
    */
   async addNote(
@@ -106,16 +114,21 @@ export class FreshworksClient {
   }
 
   /**
-   * Close a ticket
+   * Close/resolve a ticket
+   * Note: Freshservice requires responder_id and resolution_notes when closing
    */
   async closeTicket(id: number, resolution?: string): Promise<FreshTicket> {
-    const updates: Partial<FreshTicketCreatePayload> & { status: number } = {
-      status: 5, // Closed in Freshservice
+    // Get current agent to assign as responder (required for closing)
+    const agent = await this.getCurrentAgent();
+
+    const resolutionText = resolution || 'Completed via Golem';
+
+    const updates: Partial<FreshTicketCreatePayload> & { status: number; responder_id: number } = {
+      status: 4, // Resolved in Freshservice (5 = Closed requires additional workflow)
+      responder_id: agent.id,
+      resolution_notes: resolutionText,
     };
-    if (resolution) {
-      // Add resolution as a note before closing
-      await this.addNote(id, `**Resolution:**\n${resolution}`);
-    }
+
     return this.updateTicket(id, updates);
   }
 
