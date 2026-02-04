@@ -60,8 +60,8 @@ dim() {
 
 # Load environment from multiple locations
 load_env() {
-  [[ -f "$GOLEM_HOME/.env" ]] && source "$GOLEM_HOME/.env"
-  [[ -f ".env" ]] && source ".env"
+  [[ -f "$GOLEM_HOME/.env" ]] && source "$GOLEM_HOME/.env" || true
+  [[ -f ".env" ]] && source ".env" || true
 }
 
 # Check if golem-api is available
@@ -288,8 +288,14 @@ cmd_worktree() {
   load_env
 
   info "Creating worktree for $ticket_id..."
+  local output
+  output=$($GOLEM_API worktree:create "$ticket_id" 2>&1) || {
+    echo "$output" >&2
+    die "Failed to create worktree"
+  }
+
   local path
-  path=$($GOLEM_API worktree:create "$ticket_id" | tail -1)
+  path=$(echo "$output" | tail -1)
 
   success "Worktree created at $path"
   echo ""

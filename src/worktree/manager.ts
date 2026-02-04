@@ -116,15 +116,28 @@ export async function createWorktree(
     return existing.path;
   }
 
-  // Fetch latest from remote
+  // Determine the best base ref to use
+  let baseRef = baseBranch;
+
+  // Try to fetch and use remote if available
   try {
     git('fetch origin', repoRoot);
+    // Verify origin/baseBranch exists
+    git(`rev-parse --verify origin/${baseBranch}`, repoRoot);
+    baseRef = `origin/${baseBranch}`;
   } catch {
-    // Ignore fetch errors (might be offline)
+    // No remote or remote branch doesn't exist, use local branch
+    try {
+      git(`rev-parse --verify ${baseBranch}`, repoRoot);
+      baseRef = baseBranch;
+    } catch {
+      // Local branch doesn't exist either, use HEAD
+      baseRef = 'HEAD';
+    }
   }
 
-  // Create the worktree with a new branch based on the base branch
-  git(`worktree add -b ${branch} "${worktreePath}" origin/${baseBranch}`, repoRoot);
+  // Create the worktree with a new branch based on the base ref
+  git(`worktree add -b ${branch} "${worktreePath}" ${baseRef}`, repoRoot);
 
   return worktreePath;
 }
