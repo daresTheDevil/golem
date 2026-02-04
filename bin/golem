@@ -109,6 +109,8 @@ SYNC COMMANDS:
     pr                    Create PR for current ticket
 
 OTHER:
+    config                Show current configuration
+    doctor                Diagnose setup issues
     init                  Initialize golem in current project
     version               Show version
     help                  Show this help
@@ -264,8 +266,8 @@ cmd_status() {
       echo "Specs: $spec_count"
 
       if [[ -f .golem/IMPLEMENTATION_PLAN.md ]]; then
-        local total=$(grep -c '^\- \[' .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo 0)
-        local done=$(grep -c '^\- \[x\]' .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo 0)
+        local total=$(grep -cE '^(###|-) \[' .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo 0)
+        local done=$(grep -cE '^(###|-) \[x\]' .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo 0)
         echo "Tasks: $done / $total"
       else
         dim "No implementation plan"
@@ -321,7 +323,7 @@ cmd_build() {
   fi
 
   local remaining
-  remaining=$(grep -c '^\- \[ \]' .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo 0)
+  remaining=$(grep -cE '^(###|-) \[ \]' .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo 0)
 
   if [[ "$remaining" -eq 0 ]]; then
     success "All tasks complete!"
@@ -340,7 +342,7 @@ cmd_build() {
 
   # Loop until done
   while true; do
-    remaining=$(grep -c '^\- \[ \]' .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo 0)
+    remaining=$(grep -cE '^(###|-) \[ \]' .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo 0)
 
     if [[ "$remaining" -eq 0 ]]; then
       success "All tasks complete!"
@@ -490,6 +492,216 @@ Branch: $branch" \
   success "PR created"
 }
 
+cmd_config() {
+  print_banner
+  load_env
+
+  echo -e "${BOLD}Configuration${NC}"
+  echo ""
+
+  # Paths
+  echo -e "${BOLD}Paths${NC}"
+  echo "  GOLEM_HOME: $GOLEM_HOME"
+  echo ""
+
+  # Env files
+  echo -e "${BOLD}Environment Files${NC}"
+  if [[ -f "$GOLEM_HOME/.env" ]]; then
+    success "$GOLEM_HOME/.env"
+  else
+    warn "$GOLEM_HOME/.env (not found)"
+  fi
+  if [[ -f ".env" ]]; then
+    success "./.env (local)"
+  else
+    dim "  ./.env (not found)"
+  fi
+  echo ""
+
+  # Helper to print var status
+  print_var() {
+    local name="$1"
+    local value="$2"
+    local required="$3"
+    local secret="$4"
+
+    if [[ -n "$value" ]]; then
+      if [[ "$secret" == "true" ]]; then
+        echo -e "  ${GREEN}$name${NC}: (set)"
+      else
+        echo -e "  ${GREEN}$name${NC}: $value"
+      fi
+    elif [[ "$required" == "true" ]]; then
+      echo -e "  ${RED}$name${NC}: (not set) - REQUIRED"
+    else
+      echo -e "  ${YELLOW}$name${NC}: (not set)"
+    fi
+  }
+
+  # Freshservice vars
+  echo -e "${BOLD}Freshservice${NC}"
+  print_var "FRESH_DOMAIN" "${FRESH_DOMAIN:-}" "true" "false"
+  print_var "FRESH_API_KEY" "${FRESH_API_KEY:-}" "true" "true"
+  print_var "FRESH_DEFAULT_GROUP_ID" "${FRESH_DEFAULT_GROUP_ID:-}" "false" "false"
+  print_var "FRESH_DEFAULT_CATEGORY" "${FRESH_DEFAULT_CATEGORY:-}" "false" "false"
+  print_var "FRESH_SOURCE_ID" "${FRESH_SOURCE_ID:-}" "false" "false"
+  print_var "FRESH_DEFAULT_EMAIL" "${FRESH_DEFAULT_EMAIL:-}" "false" "false"
+  echo ""
+
+  # Gitea vars
+  echo -e "${BOLD}Gitea${NC}"
+  print_var "GITEA_URL" "${GITEA_URL:-}" "true" "false"
+  print_var "GITEA_TOKEN" "${GITEA_TOKEN:-}" "true" "true"
+  print_var "GITEA_ORG" "${GITEA_ORG:-}" "false" "false"
+  print_var "GITEA_REPO" "${GITEA_REPO:-}" "false" "false"
+}
+
+cmd_doctor() {
+  local check_apis=false
+  [[ "${1:-}" == "--check-apis" ]] && check_apis=true
+
+  print_banner
+  load_env
+
+  local passed=0
+  local failed=0
+
+  # Helper functions
+  check_pass() {
+    echo -e "  ${GREEN}✓${NC} $1"
+    passed=$((passed + 1))
+  }
+
+  check_fail() {
+    echo -e "  ${RED}✗${NC} $1"
+    if [[ -n "${2:-}" ]]; then
+      echo -e "    ${DIM}→ $2${NC}"
+    fi
+    failed=$((failed + 1))
+  }
+
+  # Environment checks
+  echo -e "${BOLD}Environment${NC}"
+
+  if [[ -d "$GOLEM_HOME" ]]; then
+    check_pass "$GOLEM_HOME directory exists"
+  else
+    check_fail "$GOLEM_HOME directory missing" "Run: mkdir -p $GOLEM_HOME"
+  fi
+
+  if [[ -f "$GOLEM_HOME/.env" ]]; then
+    check_pass "$GOLEM_HOME/.env file exists"
+  else
+    check_fail "$GOLEM_HOME/.env file missing" "Run: cp $GOLEM_HOME/.env.example $GOLEM_HOME/.env"
+  fi
+
+  local missing_vars=()
+  [[ -z "${FRESH_DOMAIN:-}" ]] && missing_vars+=("FRESH_DOMAIN")
+  [[ -z "${FRESH_API_KEY:-}" ]] && missing_vars+=("FRESH_API_KEY")
+  [[ -z "${GITEA_URL:-}" ]] && missing_vars+=("GITEA_URL")
+  [[ -z "${GITEA_TOKEN:-}" ]] && missing_vars+=("GITEA_TOKEN")
+
+  if [[ ${#missing_vars[@]} -eq 0 ]]; then
+    check_pass "Required env vars set"
+  else
+    check_fail "Missing required env vars: ${missing_vars[*]}" "Edit $GOLEM_HOME/.env"
+  fi
+
+  echo ""
+
+  # Dependency checks
+  echo -e "${BOLD}Dependencies${NC}"
+
+  if command -v node &>/dev/null; then
+    local node_ver=$(node --version 2>/dev/null)
+    check_pass "node $node_ver"
+  else
+    check_fail "node not found" "Install Node.js"
+  fi
+
+  if command -v pnpm &>/dev/null; then
+    local pnpm_ver=$(pnpm --version 2>/dev/null)
+    check_pass "pnpm $pnpm_ver"
+  else
+    check_fail "pnpm not found" "Run: npm install -g pnpm"
+  fi
+
+  if command -v git &>/dev/null; then
+    local git_ver=$(git --version 2>/dev/null | cut -d' ' -f3)
+    check_pass "git $git_ver"
+  else
+    check_fail "git not found" "Install git"
+  fi
+
+  if command -v golem-api &>/dev/null; then
+    check_pass "golem-api accessible"
+  else
+    check_fail "golem-api not found" "Run: ./bin/install.sh in golem directory"
+  fi
+
+  echo ""
+
+  # Installation checks
+  echo -e "${BOLD}Installation${NC}"
+
+  local prompt_count=$(ls "$GOLEM_HOME/prompts/"*.md 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$prompt_count" -gt 0 ]]; then
+    check_pass "Prompts installed ($prompt_count files)"
+  else
+    check_fail "No prompts installed" "Run: ./bin/install.sh"
+  fi
+
+  local agent_count=$(ls "$GOLEM_HOME/agents/"*.md 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$agent_count" -gt 0 ]]; then
+    check_pass "Agents installed ($agent_count files)"
+  else
+    check_fail "No agents installed" "Run: ./bin/install.sh"
+  fi
+
+  if [[ -d "$GOLEM_HOME/commands/golem" ]]; then
+    check_pass "Commands installed"
+  else
+    check_fail "Commands not installed" "Run: ./bin/install.sh"
+  fi
+
+  if [[ -L "$HOME/.claude/commands/golem" ]] && [[ -d "$HOME/.claude/commands/golem" ]]; then
+    check_pass "Claude integration linked"
+  else
+    check_fail "Claude integration not linked" "Run: ln -sf $GOLEM_HOME/commands/golem ~/.claude/commands/golem"
+  fi
+
+  echo ""
+
+  # Optional API checks
+  if [[ "$check_apis" == "true" ]]; then
+    echo -e "${BOLD}API Connectivity${NC}"
+
+    if golem-api fresh:test &>/dev/null; then
+      check_pass "Freshservice API responds"
+    else
+      check_fail "Freshservice API not responding" "Check FRESH_DOMAIN and FRESH_API_KEY"
+    fi
+
+    if golem-api gitea:test &>/dev/null; then
+      check_pass "Gitea API responds"
+    else
+      check_fail "Gitea API not responding" "Check GITEA_URL and GITEA_TOKEN"
+    fi
+
+    echo ""
+  fi
+
+  # Summary
+  local total=$((passed + failed))
+  if [[ "$failed" -eq 0 ]]; then
+    echo -e "${GREEN}Summary: $passed/$total checks passed${NC}"
+    return 0
+  else
+    echo -e "${RED}Summary: $passed/$total checks passed ($failed failed)${NC}"
+    return 1
+  fi
+}
+
 # ============================================================================
 # Main
 # ============================================================================
@@ -543,6 +755,12 @@ main() {
       ;;
     pr)
       cmd_pr "$@"
+      ;;
+    config)
+      cmd_config "$@"
+      ;;
+    doctor)
+      cmd_doctor "$@"
       ;;
     *)
       die "Unknown command: $cmd. Run 'golem help' for usage."
