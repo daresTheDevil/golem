@@ -147,21 +147,35 @@ export async function importFreshTicket(
   const freshTicket = await fresh.getTicket(numericId);
   const ticketId = FreshworksClient.formatTicketId(freshTicket.id, freshTicket.ticket_type);
 
-  // 2. Create Gitea issue with link back to Fresh
+  // 2. Check if local state already exists
+  const existingState = await loadTicketState(ticketsDir, ticketId);
+  if (existingState) {
+    console.log(`Ticket ${ticketId} already imported, returning existing state`);
+    return existingState;
+  }
+
+  // 3. Check if Gitea issue already exists for this ticket
+  let giteaIssue = await gitea.findIssueByTicketId(repo, ticketId);
   const freshUrl = `https://${process.env.FRESH_DOMAIN}/a/tickets/${freshTicket.id}`;
-  const giteaIssue = await gitea.createIssue(repo, {
-    title: `[${ticketId}] ${freshTicket.subject}`,
-    body: `${freshTicket.description_text}\n\n---\n**Freshservice:** [${ticketId}](${freshUrl})\n**Type:** ${params.type}`,
-  });
 
-  // 3. Update Fresh ticket with Gitea link
-  await fresh.addNote(
-    freshTicket.id,
-    `🔗 Gitea Issue: ${giteaIssue.html_url}`,
-    true
-  );
+  if (giteaIssue) {
+    console.log(`Found existing Gitea issue #${giteaIssue.number} for ${ticketId}`);
+  } else {
+    // 4. Create Gitea issue with link back to Fresh
+    giteaIssue = await gitea.createIssue(repo, {
+      title: `[${ticketId}] ${freshTicket.subject}`,
+      body: `${freshTicket.description_text}\n\n---\n**Freshservice:** [${ticketId}](${freshUrl})\n**Type:** ${params.type}`,
+    });
 
-  // 4. Create local state
+    // 5. Update Fresh ticket with Gitea link
+    await fresh.addNote(
+      freshTicket.id,
+      `🔗 Gitea Issue: ${giteaIssue.html_url}`,
+      true
+    );
+  }
+
+  // 6. Create local state
   const branch = `${params.type}/${ticketId}-${params.slug}`;
   const state: TicketState = {
     id: ticketId,

@@ -89,6 +89,18 @@ export class GiteaClient {
   }
 
   /**
+   * Find an issue by ticket ID prefix in the title (e.g., "[INC-123]")
+   * Returns the first matching issue or null if not found
+   */
+  async findIssueByTicketId(repo: string, ticketId: string): Promise<GiteaIssue | null> {
+    // Search all issues (open and closed) for one with the ticket ID in the title
+    const issues = await this.listIssues(repo, { state: 'all' });
+    const prefix = `[${ticketId}]`;
+    const match = issues.find(issue => issue.title.startsWith(prefix));
+    return match || null;
+  }
+
+  /**
    * Create a new issue
    */
   async createIssue(repo: string, payload: GiteaIssueCreatePayload): Promise<GiteaIssue> {
