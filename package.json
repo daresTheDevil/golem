@@ -1,13 +1,22 @@
 {
   "name": "golem-cc",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Personal agentic workflow: Freshworks ↔ Gitea ↔ Local development",
   "repository": {
     "type": "git",
     "url": "https://github.com/daresTheDevil/golem"
   },
   "type": "module",
+  "files": [
+    "bin/",
+    "dist/",
+    "commands/",
+    "golem/",
+    ".env.example",
+    "README.md"
+  ],
   "bin": {
+    "golem-cc": "./bin/golem",
     "golem": "./bin/golem",
     "golem-api": "./dist/cli/index.js"
   },
@@ -15,8 +24,7 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "lint": "eslint src/",
-    "typecheck": "tsc --noEmit",
-    "install:global": "./bin/install.sh"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "chalk": "^5.3.0",

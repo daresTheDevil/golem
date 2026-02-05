@@ -124,6 +124,7 @@ SYNC COMMANDS:
 
 OTHER:
     install               Install/update golem globally
+    uninstall             Remove golem completely
     config                Show current configuration
     doctor                Diagnose setup issues
     init                  Initialize golem in current project
@@ -148,7 +149,15 @@ cmd_version() {
 
 cmd_init() {
   print_banner
-  info "Initializing golem..."
+
+  # Validate global installation
+  if [[ ! -d "$GOLEM_HOME/lib" ]]; then
+    warn "Golem is not installed globally."
+    echo "  Run: pnpm dlx golem-cc"
+    echo ""
+  fi
+
+  info "Initializing golem in current project..."
 
   mkdir -p .golem/{specs,tickets,worktrees}
 
@@ -184,6 +193,8 @@ EOF
   if [[ -d "$GOLEM_HOME/commands/golem" ]]; then
     ln -sf "$GOLEM_HOME/commands/golem" .claude/commands/golem 2>/dev/null || true
     success "Linked Claude commands"
+  else
+    warn "Claude commands not found (install golem globally first)"
   fi
 
   # Add .golem to .gitignore
@@ -507,68 +518,175 @@ Branch: $branch" \
   success "PR created"
 }
 
-cmd_install() {
+# Resolve the package root from this script's location.
+# When run via pnpm dlx, $0 lives inside a temp store.
+# When run from ~/.golem/lib, $0 is there.
+_resolve_pkg_root() {
+  local script_path
+  script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # bin/ is one level under package root
+  echo "$(cd "$script_path/.." && pwd)"
+}
+
+# Bootstrap: copy package contents into ~/.golem/lib and wire everything up.
+cmd_bootstrap() {
+  local pkg_root
+  pkg_root="$(_resolve_pkg_root)"
+
   print_banner
-  info "Installing/updating golem..."
+  info "Installing golem to $GOLEM_HOME..."
 
-  local src_dir="$GOLEM_HOME/src"
+  # ---- runtime ----
+  mkdir -p "$GOLEM_HOME/lib"
+  # Copy the package runtime (bin, dist, node_modules, package.json)
+  for item in bin dist node_modules package.json; do
+    if [[ -e "$pkg_root/$item" ]]; then
+      rm -rf "$GOLEM_HOME/lib/$item"
+      cp -R "$pkg_root/$item" "$GOLEM_HOME/lib/$item"
+    fi
+  done
+  success "Installed runtime to $GOLEM_HOME/lib"
 
-  # Clone or update
-  if [[ -d "$src_dir/.git" ]]; then
-    info "Updating existing installation..."
-    git -C "$src_dir" pull --ff-only || die "Failed to update. Try: rm -rf $src_dir"
-  else
-    info "Cloning golem..."
-    mkdir -p "$GOLEM_HOME"
-    git clone https://github.com/daresTheDevil/golem.git "$src_dir" || die "Failed to clone"
-  fi
-
-  # Build
-  info "Building..."
-  cd "$src_dir"
-  pnpm install --silent || die "pnpm install failed"
-  pnpm build || die "Build failed"
-
-  # Copy assets
-  info "Installing assets..."
+  # ---- assets ----
   mkdir -p "$GOLEM_HOME"/{commands,agents,prompts}
-  cp -r "$src_dir/commands/golem" "$GOLEM_HOME/commands/"
-  cp "$src_dir/golem/agents/"*.md "$GOLEM_HOME/agents/"
-  cp "$src_dir/golem/prompts/"*.md "$GOLEM_HOME/prompts/"
+  if [[ -d "$pkg_root/commands/golem" ]]; then
+    rm -rf "$GOLEM_HOME/commands/golem"
+    cp -R "$pkg_root/commands/golem" "$GOLEM_HOME/commands/golem"
+  fi
+  if compgen -G "$pkg_root/golem/agents/"*.md &>/dev/null; then
+    cp "$pkg_root/golem/agents/"*.md "$GOLEM_HOME/agents/"
+  fi
+  if compgen -G "$pkg_root/golem/prompts/"*.md &>/dev/null; then
+    cp "$pkg_root/golem/prompts/"*.md "$GOLEM_HOME/prompts/"
+  fi
+  success "Installed assets (commands, agents, prompts)"
 
-  # Link binaries
+  # ---- symlinks in ~/.local/bin ----
   mkdir -p "$HOME/.local/bin"
-  ln -sf "$src_dir/bin/golem" "$HOME/.local/bin/golem"
-  ln -sf "$src_dir/dist/cli/index.js" "$HOME/.local/bin/golem-api"
-  chmod +x "$src_dir/dist/cli/index.js"
+  ln -sf "$GOLEM_HOME/lib/bin/golem" "$HOME/.local/bin/golem"
+  ln -sf "$GOLEM_HOME/lib/dist/cli/index.js" "$HOME/.local/bin/golem-api"
+  chmod +x "$GOLEM_HOME/lib/bin/golem"
+  chmod +x "$GOLEM_HOME/lib/dist/cli/index.js" 2>/dev/null || true
+  success "Linked binaries to ~/.local/bin"
 
-  # Link Claude commands
+  # ---- Claude slash-commands ----
   mkdir -p "$HOME/.claude/commands"
   ln -sf "$GOLEM_HOME/commands/golem" "$HOME/.claude/commands/golem" 2>/dev/null || true
+  success "Linked Claude commands"
 
-  # Create env template if needed
+  # ---- .env template ----
+  if [[ -f "$pkg_root/.env.example" ]]; then
+    cp "$pkg_root/.env.example" "$GOLEM_HOME/.env.example"
+  fi
   if [[ ! -f "$GOLEM_HOME/.env" ]]; then
-    cat > "$GOLEM_HOME/.env" << 'ENVEOF'
-# Freshservice
+    if [[ -f "$GOLEM_HOME/.env.example" ]]; then
+      cp "$GOLEM_HOME/.env.example" "$GOLEM_HOME/.env"
+    else
+      cat > "$GOLEM_HOME/.env" << 'ENVEOF'
+# Freshworks/Freshservice
 FRESH_DOMAIN=yourcompany.freshservice.com
-FRESH_API_KEY=your_api_key
+FRESH_API_KEY=your_api_key_here
 
-# Gitea
-GITEA_URL=https://gitea.example.com
-GITEA_TOKEN=your_token
-GITEA_ORG=your-org
-GITEA_REPO=default-repo
+# Gitea (on-prem)
+GITEA_URL=https://dev.pearlriverresort.com
+GITEA_TOKEN=your_token_here
+GITEA_ORG=CRDE
+
+# Default repo for issues (can be overridden per-project)
+GITEA_REPO=
 ENVEOF
-    warn "Created $GOLEM_HOME/.env - edit with your credentials"
+    fi
+    warn "Created $GOLEM_HOME/.env — edit with your credentials"
+  fi
+
+  # ---- PATH setup (idempotent) ----
+  local shell_rc="$HOME/.zshrc"
+  [[ -f "$HOME/.bashrc" && ! -f "$HOME/.zshrc" ]] && shell_rc="$HOME/.bashrc"
+
+  if [[ -f "$shell_rc" ]]; then
+    if ! grep -q '$HOME/.local/bin' "$shell_rc" 2>/dev/null; then
+      echo '' >> "$shell_rc"
+      echo '# golem: add ~/.local/bin to PATH' >> "$shell_rc"
+      echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$shell_rc"
+      success "Added ~/.local/bin to PATH in $(basename "$shell_rc")"
+    fi
   fi
 
   echo ""
   success "Installation complete!"
   echo ""
-  echo "Make sure ~/.local/bin is in your PATH:"
-  echo '  export PATH="$HOME/.local/bin:$PATH"'
+  echo "Restart your shell (or run: source $shell_rc), then:"
+  echo "  golem doctor     # verify setup"
+  echo "  golem config     # show configuration"
+  echo "  cd <project> && golem init   # set up a project"
+}
+
+cmd_uninstall() {
+  print_banner
+  echo -e "${BOLD}This will remove:${NC}"
+  echo "  $GOLEM_HOME              (runtime, assets, config)"
+  echo "  ~/.local/bin/golem       (symlink)"
+  echo "  ~/.local/bin/golem-api   (symlink)"
+  echo "  ~/.claude/commands/golem (symlink)"
   echo ""
-  echo "Then run: golem doctor"
+
+  # Check for .env with real credentials and warn
+  if [[ -f "$GOLEM_HOME/.env" ]]; then
+    warn "Your credentials in $GOLEM_HOME/.env will be deleted."
+    echo "  Back up now if needed: cp $GOLEM_HOME/.env ~/golem-env-backup"
+    echo ""
+  fi
+
+  read -p "Are you sure? [y/N] " confirm
+  [[ "$confirm" != "y" && "$confirm" != "Y" ]] && { echo "Aborted."; exit 0; }
+
+  # Remove symlinks in ~/.local/bin
+  for bin in golem golem-api; do
+    local target="$HOME/.local/bin/$bin"
+    if [[ -L "$target" || -f "$target" ]]; then
+      rm -f "$target"
+      success "Removed $target"
+    fi
+  done
+
+  # Remove Claude commands symlink
+  if [[ -L "$HOME/.claude/commands/golem" || -d "$HOME/.claude/commands/golem" ]]; then
+    rm -rf "$HOME/.claude/commands/golem"
+    success "Removed ~/.claude/commands/golem"
+  fi
+
+  # Remove ~/.golem entirely
+  if [[ -d "$GOLEM_HOME" ]]; then
+    rm -rf "$GOLEM_HOME"
+    success "Removed $GOLEM_HOME"
+  fi
+
+  echo ""
+  success "Golem uninstalled."
+  echo ""
+  dim "The PATH entry in your shell rc was left in place (it's harmless)."
+  dim "To reinstall later: pnpm dlx golem-cc"
+}
+
+cmd_install() {
+  # If --from <path> given, bootstrap from a local checkout (dev workflow)
+  if [[ "${1:-}" == "--from" ]]; then
+    local local_path="${2:-}"
+    [[ -z "$local_path" ]] && die "Usage: golem install --from <path>"
+    [[ ! -d "$local_path/bin" ]] && die "Not a golem package directory: $local_path"
+
+    # Temporarily override _resolve_pkg_root
+    _resolve_pkg_root() { echo "$local_path"; }
+    cmd_bootstrap
+    return
+  fi
+
+  print_banner
+  info "Updating golem via pnpm dlx..."
+  echo ""
+
+  # Re-run pnpm dlx golem-cc which will hit the bootstrap path
+  pnpm dlx golem-cc || die "Update failed"
 }
 
 cmd_config() {
@@ -715,7 +833,7 @@ cmd_doctor() {
   if command -v golem-api &>/dev/null; then
     check_pass "golem-api accessible"
   else
-    check_fail "golem-api not found" "Run: ./bin/install.sh in golem directory"
+    check_fail "golem-api not found" "Run: pnpm dlx golem-cc"
   fi
 
   echo ""
@@ -723,24 +841,30 @@ cmd_doctor() {
   # Installation checks
   echo -e "${BOLD}Installation${NC}"
 
+  if [[ -d "$GOLEM_HOME/lib" ]]; then
+    check_pass "Runtime installed ($GOLEM_HOME/lib)"
+  else
+    check_fail "Runtime not installed" "Run: pnpm dlx golem-cc"
+  fi
+
   local prompt_count=$(ls "$GOLEM_HOME/prompts/"*.md 2>/dev/null | wc -l | tr -d ' ')
   if [[ "$prompt_count" -gt 0 ]]; then
     check_pass "Prompts installed ($prompt_count files)"
   else
-    check_fail "No prompts installed" "Run: ./bin/install.sh"
+    check_fail "No prompts installed" "Run: pnpm dlx golem-cc"
   fi
 
   local agent_count=$(ls "$GOLEM_HOME/agents/"*.md 2>/dev/null | wc -l | tr -d ' ')
   if [[ "$agent_count" -gt 0 ]]; then
     check_pass "Agents installed ($agent_count files)"
   else
-    check_fail "No agents installed" "Run: ./bin/install.sh"
+    check_fail "No agents installed" "Run: pnpm dlx golem-cc"
   fi
 
   if [[ -d "$GOLEM_HOME/commands/golem" ]]; then
     check_pass "Commands installed"
   else
-    check_fail "Commands not installed" "Run: ./bin/install.sh"
+    check_fail "Commands not installed" "Run: pnpm dlx golem-cc"
   fi
 
   if [[ -L "$HOME/.claude/commands/golem" ]] && [[ -d "$HOME/.claude/commands/golem" ]]; then
@@ -786,8 +910,18 @@ cmd_doctor() {
 # ============================================================================
 
 main() {
-  local cmd="${1:-help}"
+  local cmd="${1:-}"
   shift || true
+
+  # No args: bootstrap if not installed, otherwise show help
+  if [[ -z "$cmd" ]]; then
+    if [[ -d "$GOLEM_HOME/lib" ]]; then
+      cmd_help
+    else
+      cmd_bootstrap
+    fi
+    return
+  fi
 
   case "$cmd" in
     help|--help|-h)
@@ -843,6 +977,9 @@ main() {
       ;;
     install)
       cmd_install "$@"
+      ;;
+    uninstall)
+      cmd_uninstall "$@"
       ;;
     *)
       die "Unknown command: $cmd. Run 'golem help' for usage."

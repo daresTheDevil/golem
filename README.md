@@ -5,21 +5,33 @@ Personal agentic workflow manager. Integrates Freshservice tickets, Gitea issues
 ## Installation
 
 ```bash
-# Install globally via npm
-npm install -g golem-cc
-
-# Or run directly with pnpm
+# Bootstrap (one command)
 pnpm dlx golem-cc
 ```
 
-After installing, run the setup:
+This copies everything to `~/.golem/`, links binaries to `~/.local/bin/`, and wires up Claude slash-commands.
+
+After installing, restart your shell and configure:
 
 ```bash
-# Check your installation
+# Verify setup
 golem doctor
 
-# Configure credentials
+# Edit credentials
 vim ~/.golem/.env
+
+# Initialize a project
+cd your-project && golem init
+```
+
+### Updating
+
+```bash
+# From a running install
+golem install
+
+# Or from a local checkout (dev workflow)
+golem install --from /path/to/golem-cc
 ```
 
 ## Architecture
