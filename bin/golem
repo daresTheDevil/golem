@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 GOLEM_HOME="${GOLEM_HOME:-$HOME/.golem}"
 GOLEM_API="golem-api"
 

@@ -32,11 +32,12 @@ jobs:
       - name: Build
         run: pnpm build
 
-      - name: Sync package.json version from git tag
+      - name: Sync version from git tag
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "Setting version to $VERSION"
           npm version $VERSION --no-git-tag-version --allow-same-version
+          sed -i "s/^VERSION=\".*\"/VERSION=\"$VERSION\"/" bin/golem
 
       - name: Publish to npm
         run: npm publish --access public --provenance
