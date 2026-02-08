@@ -123,7 +123,8 @@ SYNC COMMANDS:
     pr                    Create PR for current ticket
 
 OTHER:
-    install               Install/update golem globally
+    update [version]      Update golem (default: latest)
+    install               Install golem globally
     uninstall             Remove golem completely
     config                Show current configuration
     doctor                Diagnose setup issues
@@ -697,12 +698,42 @@ cmd_install() {
     return
   fi
 
-  print_banner
-  info "Updating golem via pnpm dlx..."
-  echo ""
+  # Default: install from npm
+  local version="${1:-latest}"
+  cmd_update "$version"
+}
 
-  # Re-run pnpm dlx golem-cc which will hit the bootstrap path
-  pnpm dlx golem-cc || die "Update failed"
+cmd_update() {
+  local version="${1:-latest}"
+
+  print_banner
+  info "Fetching golem-cc@$version from npm..."
+
+  # Download to temp directory
+  local tmp
+  tmp=$(mktemp -d)
+  trap "rm -rf '$tmp'" EXIT
+
+  if ! pnpm --prefix="$tmp" add "golem-cc@$version" --silent 2>/dev/null; then
+    die "Failed to fetch golem-cc@$version"
+  fi
+
+  local pkg_path="$tmp/node_modules/golem-cc"
+  [[ ! -d "$pkg_path/bin" ]] && die "Downloaded package is invalid"
+
+  # Bootstrap from downloaded package
+  _resolve_pkg_root() { echo "$pkg_path"; }
+  cmd_bootstrap
+
+  # Update current project if we're in one
+  if [[ -d ".golem" ]]; then
+    echo ""
+    info "Updating project..."
+    cmd_init
+  fi
+
+  trap - EXIT
+  rm -rf "$tmp"
 }
 
 cmd_config() {
@@ -990,6 +1021,9 @@ main() {
       ;;
     doctor)
       cmd_doctor "$@"
+      ;;
+    update)
+      cmd_update "$@"
       ;;
     install)
       cmd_install "$@"
