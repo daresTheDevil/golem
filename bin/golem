@@ -132,9 +132,11 @@ OTHER:
     help                  Show this help
 
 CLAUDE COMMANDS (inside Claude Code):
-    /golem:spec           Define specs interactively
-    /golem:plan           Create implementation plan
-    /golem:build          Run build loop (one task at a time)
+    /golem:spec           Define specs (agent team: UX, Architect, Devil's Advocate)
+    /golem:plan           Create implementation plan (agent team per layer)
+    /golem:build          Build lead + builders (observable, interruptible)
+    /golem:security       Run security scans (gitleaks, semgrep, pnpm audit, trivy)
+    /golem:review         Security + code review (runs security first, then agent team)
     /golem:simplify       Run code simplifier
     /golem:status         Show current status
     /golem:help           Show help
@@ -424,19 +426,30 @@ Files to simplify: $files"
 }
 
 cmd_squash() {
-  local ticket_id
+  local ticket_id message=""
   ticket_id=$(get_current_ticket)
   [[ -z "$ticket_id" ]] && die "Not in a ticket worktree"
+
+  # Parse arguments for -m flag
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -m|--message)
+        message="$2"
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
 
   check_api
   load_env
 
-  # Find current stage commit message from plan
   if [[ ! -f .golem/IMPLEMENTATION_PLAN.md ]]; then
     die "No implementation plan found"
   fi
 
-  # Get the commit message for current stage (simplified - just prompt user)
   echo -e "${BOLD}Squashing commits for $ticket_id${NC}"
   echo ""
 
@@ -449,9 +462,12 @@ cmd_squash() {
     return 0
   fi
 
-  echo ""
-  read -p "Commit message: " message
-  [[ -z "$message" ]] && die "Commit message required"
+  # If message not provided via flag, prompt interactively
+  if [[ -z "$message" ]]; then
+    echo ""
+    read -p "Commit message: " message
+    [[ -z "$message" ]] && die "Commit message required"
+  fi
 
   info "Squashing..."
   $GOLEM_API git:squash "$ticket_id" -m "$message"

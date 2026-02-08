@@ -1,6 +1,6 @@
 {
   "name": "golem-cc",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Personal agentic workflow: Freshworks ↔ Gitea ↔ Local development",
   "repository": {
     "type": "git",

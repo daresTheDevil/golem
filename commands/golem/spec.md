@@ -1,11 +1,11 @@
 ---
 name: golem:spec
 description: Build project specs through guided conversation
-allowed-tools: [Read, Write, Glob, Grep, Bash, AskUserQuestion]
+allowed-tools: [Read, Write, Glob, Grep, Bash, AskUserQuestion, Task]
 ---
 
 <objective>
-Guide the user through a structured conversation to define requirements for the current ticket/issue and generate spec files. This creates the foundation for the implementation plan and build loop.
+Spawn an agent team to explore requirements from multiple angles, challenge assumptions, and generate robust specs. The team synthesizes findings into spec files that form the foundation for planning and building.
 </objective>
 
 <execution_context>
@@ -32,57 +32,91 @@ Project structure:
 ```bash
 if [ -f package.json ]; then echo "Node/TypeScript project"; head -30 package.json; fi
 if [ -f pyproject.toml ]; then echo "Python project"; head -30 pyproject.toml; fi
+if [ -f Cargo.toml ]; then echo "Rust project"; head -30 Cargo.toml; fi
 ```
 </context>
 
 <process>
 
-## Phase 1: Ticket Context
+## Phase 1: Gather Initial Context
 
-If we're in a ticket worktree:
-1. Read the Fresh ticket description and Gitea issue
-2. Summarize what the user/reporter is asking for
-3. Ask clarifying questions about the actual need
+Before spawning the team, gather baseline information:
 
-If NOT in a ticket worktree:
-1. Ask: "What are you building? What problem does this solve?"
-2. Offer to create a ticket: "Should I create a Fresh ticket and Gitea issue for this work?"
+1. If in a ticket worktree: read the ticket description
+2. If NOT in a ticket worktree: ask what we're building
+3. Get a rough sense of scope and purpose
 
-## Phase 2: Requirement Extraction
+## Phase 2: Spawn Spec Team
 
-Understand the scope:
-1. **What's the actual problem?** - Not the solution, the problem
-2. **Who's affected?** - Users, internal, integrations?
-3. **What's the minimum viable fix/feature?** - v1 scope
-4. **What's explicitly NOT in scope?** - Boundaries
+Create an agent team with three specialized teammates:
 
-Use `AskUserQuestion` for concrete choices, open questions for exploration.
+```
+Create an agent team to explore requirements for this feature/fix.
+Spawn three teammates:
 
-## Phase 3: Topic Decomposition
+1. **UX Advocate** - Focuses on user experience and usability:
+   - Who are the users?
+   - What's their workflow?
+   - What's the simplest interface that solves the problem?
+   - Where will users get confused or frustrated?
 
-Extract distinct "topics of concern":
-1. Based on what you learned, propose 1-5 topics
-   - Each topic should pass the "no AND test"
-   - Good: "input validation", "error handling", "API response format"
-   - Bad: "validation and error handling" (split these)
+2. **Architect** - Focuses on technical design:
+   - What's the system architecture?
+   - How does this fit into existing code?
+   - What are the technical constraints?
+   - What are the integration points?
 
-2. Ask if any topics should be added, removed, or split
+3. **Devil's Advocate** - Actively challenges assumptions:
+   - "Do we actually need this?"
+   - "What's the simplest thing that could work?"
+   - "What happens when X fails?"
+   - "Why not use existing solution Y?"
 
-## Phase 4: Spec Generation
+   Rules for Devil's Advocate:
+   - Must articulate WHY something is problematic
+   - Must propose a concrete alternative
+   - Must back down when concern is adequately addressed
+   - Goal is better thinking, not blocking progress
 
-For each topic, have a focused mini-conversation:
+Have them explore the problem space simultaneously, share findings,
+and challenge each other's assumptions. The debate should surface
+requirements we'd otherwise miss.
+```
 
-1. **Requirements**: Ask 2-4 targeted questions:
-   - What MUST it do?
-   - What SHOULD it do if time allows?
-   - What must it NOT do?
-   - Technical constraints?
+## Phase 3: Team Exploration
 
-2. **Tests**: What tests must pass for this to be considered done?
+Let the team explore these questions:
 
-3. **Write File**: Save to `.golem/specs/{topic-name}.md`
+### UX Advocate investigates:
+- What's the actual problem users face?
+- What's the minimum viable solution?
+- What edge cases will users encounter?
+- What error states need handling?
 
-### Spec File Format
+### Architect investigates:
+- What existing code/patterns can we reuse?
+- What new components are needed?
+- What are the dependencies?
+- What technical constraints exist?
+
+### Devil's Advocate challenges:
+- Is this feature actually necessary?
+- Are we overengineering?
+- What's the cost of NOT doing this?
+- What simpler alternatives exist?
+
+## Phase 4: Synthesize Findings
+
+After team exploration, synthesize into topics:
+
+1. Review findings from all three perspectives
+2. Identify 1-5 distinct topics of concern
+3. Each topic should pass the "no AND test"
+4. Resolve any conflicts between teammates
+
+## Phase 5: Generate Spec Files
+
+For each topic, write to `.golem/specs/{topic-name}.md`:
 
 ```markdown
 # {Topic Name}
@@ -110,22 +144,22 @@ Ticket: {INC-XXXX} (if applicable)
 
 ## Tests
 - {Test description} → expects {outcome}
-- {Test description} → expects {outcome}
 
 ## Technical Notes
-{Implementation hints, constraints, or decisions}
+{Implementation hints, constraints, decisions}
+
+## Considered Alternatives
+{What the Devil's Advocate proposed and why we did/didn't take it}
 ```
 
-## Phase 5: Operational Setup
+## Phase 6: Operational Setup
 
-After all specs are written:
+After specs are written:
 
 1. Create `.golem/specs/` directory if needed
 2. Write each spec file
 3. Detect or ask for test/build/lint commands
-4. Write `.golem/AGENTS.md`
-
-### AGENTS.md Format
+4. Write `.golem/AGENTS.md`:
 
 ```markdown
 # Operational Guide
@@ -154,16 +188,15 @@ Branch: {branch-name}
 <!-- Updated during build iterations -->
 ```
 
-## Phase 6: Sync & Completion
+## Phase 7: Cleanup & Completion
 
-1. Update the ticket status to "spec" in Fresh and Gitea:
+1. Clean up the agent team
+2. Update ticket status:
    ```bash
    golem-api ticket:status $TICKET_ID spec --note "Specs complete"
    ```
-
-2. Summarize what was created
-
-3. Show next steps:
+3. Summarize what was created
+4. Show next steps:
    ```
    Specs complete! Next steps:
    1. Review .golem/specs/ and adjust if needed
@@ -174,10 +207,20 @@ Branch: {branch-name}
 </process>
 
 <success_criteria>
-- [ ] Ticket context incorporated
-- [ ] User requirements fully captured
+- [ ] Agent team explored requirements from 3 perspectives
+- [ ] Devil's advocate challenged assumptions
+- [ ] Conflicts resolved through discussion
 - [ ] Each topic has a separate spec file
 - [ ] Tests defined in each spec
+- [ ] Alternatives considered and documented
 - [ ] AGENTS.md exists with operational commands
-- [ ] Ticket status synced to Fresh/Gitea
+- [ ] Team cleaned up
+- [ ] Ticket status synced
 </success_criteria>
+
+<important>
+- The Devil's Advocate must be ACTIVE, not passive criticism
+- All three perspectives should contribute to final specs
+- Document "Considered Alternatives" so we remember why we chose this path
+- Clean up the team when done
+</important>

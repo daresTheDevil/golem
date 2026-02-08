@@ -1,11 +1,11 @@
 ---
 name: golem:build
-description: Run autonomous build loop - implement, test, simplify, commit
+description: Run autonomous build loop with observability
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Task]
 ---
 
 <objective>
-Execute the autonomous build loop: select a task, implement it, validate with tests, simplify the code, and commit. Each task gets its own commit. When a stage is complete, all commits in that stage are squashed into one.
+Act as a build lead that orchestrates sequential builder teammates. Each task gets its own builder with fresh context. You coordinate the work, track progress, and handle issues. The user can observe progress and intervene when needed.
 </objective>
 
 <execution_context>
@@ -20,6 +20,7 @@ TICKET_ID=$(basename "$(pwd)" | grep -oE '(INC|SR)-[0-9]+' || echo "")
 if [ -n "$TICKET_ID" ]; then
   cat .golem/tickets/$TICKET_ID.yaml 2>/dev/null
 fi
+echo "TICKET_ID=$TICKET_ID"
 ```
 
 Load specs:
@@ -39,7 +40,11 @@ cat .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo "No plan - run /golem:plan
 
 Check remaining tasks:
 ```bash
+echo "Remaining tasks:"
 grep -c '^\- \[ \]' .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo "0"
+echo ""
+echo "Completed tasks:"
+grep -c '^\- \[x\]' .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo "0"
 ```
 </context>
 
@@ -54,117 +59,177 @@ grep -c '^\- \[ \]' .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo "0"
 
 If missing prerequisites, instruct user to run appropriate command first.
 
-## Build Loop
+## Build Lead Role
 
-For each iteration:
+You are the **build lead**. Your job is to:
+- Track overall progress through the implementation plan
+- Spawn builder teammates for each task (one at a time, fresh context)
+- Monitor builder progress and relay status to the user
+- Handle failures and blocked tasks
+- Squash commits when a stage completes
+- Keep the user informed so they can intervene if needed
 
-### 1. Orient
-- Read the current .golem/IMPLEMENTATION_PLAN.md
-- Identify current stage and task
-- Review relevant specs for context
+You do NOT implement tasks yourself. You delegate to builders.
 
-### 2. Select Task
-- Pick the **first** incomplete task in the current stage
-- Skip only if it has unmet dependencies
-- Never cherry-pick based on preference
+## The Build Loop
 
-### 3. Investigate
-- Search relevant source code
-- Understand existing patterns
-- Identify files to modify
+For each task in the current stage:
 
-### 4. Implement
-- Make changes required for this task ONLY
-- Follow existing code patterns and conventions
-- Write tests alongside implementation
-- Keep changes minimal and focused
+### 1. Identify Next Task
 
-### 5. Validate (Backpressure)
-Run ALL gates from .golem/AGENTS.md. ALL must pass:
+Read .golem/IMPLEMENTATION_PLAN.md and find the first incomplete task (`- [ ]`).
 
-```bash
-# Run test command
-{test_command from .golem/AGENTS.md}
-
-# Run typecheck if configured
-{typecheck_command from .golem/AGENTS.md}
-
-# Run lint if configured
-{lint_command from .golem/AGENTS.md}
+Announce to the user:
+```
+=== Task {N.M}: {task title} ===
+Files: {expected files}
+Spawning builder...
 ```
 
-If any gate fails:
-- Read the error carefully
-- Fix the issue
-- Re-run ALL gates from start
-- Repeat until all pass
+### 2. Spawn Builder Teammate
 
-### 6. Simplify
-After tests pass, simplify modified files:
+Create a builder teammate for this specific task:
 
-Use the code-simplifier agent principles:
-- Remove unnecessary comments
-- Flatten nested conditionals
-- Improve variable/function names
-- Remove dead code
-- **Preserve ALL behavior**
+```
+Spawn a builder teammate with this prompt:
 
-Re-run tests after simplification.
+"You are a builder. Complete this ONE task, then shut down.
 
-### 7. Update Plan & Commit
-Edit `.golem/IMPLEMENTATION_PLAN.md`:
-- Change `[ ]` to `[x]` for completed task
+TASK: {task title}
+FILES: {expected files}
+NOTES: {implementation hints from plan}
+TESTS: {what tests verify this}
 
-Create task commit:
-```bash
-git add -A
-git commit -m "wip: {task description} [{TICKET_ID}]"
+WORKFLOW:
+1. Write tests first (red phase)
+2. Implement minimum code to pass tests (green phase)
+3. Run validation gates from .golem/AGENTS.md
+4. If gates fail: fix and retry (up to 3 attempts)
+5. Simplify code (remove comments, flatten logic, improve names)
+6. Re-run validation after simplification
+7. Report back: SUCCESS or BLOCKED with reason
+
+DO NOT commit. The lead handles commits.
+DO NOT modify the implementation plan. The lead handles that.
+
+If you get stuck (DB not running, missing dependency, unclear requirement),
+report BLOCKED immediately with a clear explanation. Do not retry forever."
+
+Require plan approval before implementation.
 ```
 
-### 8. Check Stage Completion
+### 3. Monitor Builder
 
-If current stage is complete (all tasks marked `[x]`):
+Watch the builder's progress. The user can see this too.
 
-1. **Squash stage commits** into one clean commit:
+**If builder reports SUCCESS:**
+- Mark task complete in .golem/IMPLEMENTATION_PLAN.md
+- Create atomic commit:
+  ```bash
+  git add -A
+  git commit -m "wip: {brief task description}"
+  ```
+- Announce: `✓ Task {N.M} complete`
+- Shut down the builder
+- Continue to next task
+
+**If builder reports BLOCKED:**
+- Announce to user:
+  ```
+  ⚠ Task {N.M} BLOCKED
+  Reason: {builder's explanation}
+
+  Options:
+  1. I can skip this task and continue
+  2. You can provide guidance and I'll retry
+  3. You can fix the issue and tell me to retry
+  ```
+- Wait for user input before proceeding
+- Do NOT auto-retry blocked tasks
+
+**If builder is struggling (3+ failed attempts):**
+- Message the builder: "What's blocking you?"
+- Relay the answer to the user
+- Ask user how to proceed
+
+### 4. Stage Completion
+
+When all tasks in a stage are marked `[x]`:
+
+1. Announce: `=== Stage {N} Complete ===`
+
+2. Squash all wip commits:
    ```bash
-   golem-api git:squash $TICKET_ID -m "{stage commit message from plan} [{TICKET_ID}]"
+   golem-api git:squash "{TICKET_ID}" -m "{stage commit message from plan}"
    ```
 
-2. **Update ticket status** with progress:
+3. Update ticket status:
    ```bash
-   golem-api ticket:status $TICKET_ID in-progress --note "Stage N complete: {stage name}"
+   golem-api ticket:status "{TICKET_ID}" in-progress --note "Stage {N} complete: {stage name}"
    ```
 
-3. **Update plan** to mark stage complete
+4. If more stages remain: announce and continue
+5. If all stages complete: proceed to completion
 
-4. Continue to next stage
+### 5. Overall Completion
 
-### 9. Check Overall Completion
+When all stages are complete:
+```
+=== BUILD COMPLETE ===
 
-- If remaining tasks > 0: continue to next iteration
-- If all stages complete:
-  - Update ticket status to "review"
-  - Announce completion
-  - Suggest creating PR
-- If stuck for 3+ attempts on same task: mark blocked and move on
+All {N} stages complete.
+Ticket: {TICKET_ID}
+
+Next steps:
+1. Run /golem:review for code review
+2. Run golem pr to create pull request
+```
+
+Update ticket status to "review".
 
 </process>
 
+<user_controls>
+
+The user can intervene at any time:
+
+- **"skip"** - Skip the current blocked task, continue to next
+- **"retry"** - Tell the current builder to try again
+- **"stop"** - Stop the build loop, keep progress
+- **"status"** - Show current progress summary
+- **Message the builder directly** - Use Shift+Up/Down to select and message
+
+As lead, relay these commands appropriately and keep the user informed.
+
+</user_controls>
+
 <success_criteria>
-- [ ] Task selected from plan
+For each task:
+- [ ] Builder spawned with fresh context
+- [ ] Tests written first
 - [ ] Implementation complete
-- [ ] All tests passing
+- [ ] All gates passing
 - [ ] Code simplified
-- [ ] Plan updated
-- [ ] Task committed
-- [ ] Stage squashed when complete
-- [ ] Ticket status synced
+- [ ] Atomic commit created
+- [ ] Builder shut down
+
+For each stage:
+- [ ] All tasks complete
+- [ ] Commits squashed
+- [ ] Ticket status updated
+
+Overall:
+- [ ] User can observe progress
+- [ ] User can intervene when needed
+- [ ] Blocked tasks surfaced immediately
 </success_criteria>
 
 <important>
-- Complete ONE task per message, then check if user wants to continue
-- Fresh context helps - don't accumulate too much in one session
-- Trust the tests - if they pass, implementation is correct
-- Each task gets a wip commit, each stage gets squashed
-- Keep ticket status updated throughout
+- You are the LEAD, not the implementer - delegate to builders
+- Each builder gets ONE task, then shuts down (fresh context)
+- Surface blockers immediately - don't let builders spin
+- Keep the user informed at every step
+- The user can always intervene - that's the point
+- Builders should NOT commit or modify the plan
+- YOU handle commits, plan updates, and squashing
 </important>

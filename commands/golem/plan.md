@@ -1,11 +1,11 @@
 ---
 name: golem:plan
 description: Create implementation plan from specs
-allowed-tools: [Read, Write, Glob, Grep, Bash]
+allowed-tools: [Read, Write, Glob, Grep, Bash, Task]
 ---
 
 <objective>
-Analyze specs versus existing code and create .golem/IMPLEMENTATION_PLAN.md with prioritized, staged tasks.
+Spawn an agent team to analyze specs, explore the codebase from multiple angles, and create a robust implementation plan. Each teammate owns a layer/module, and a devil's advocate challenges the proposed architecture before the plan is finalized.
 </objective>
 
 <execution_context>
@@ -39,54 +39,87 @@ cat .golem/IMPLEMENTATION_PLAN.md 2>/dev/null || echo "No existing plan"
 
 <process>
 
-## 1. Read All Specs
+## Phase 1: Analyze Specs
 
-Read each file in `.golem/specs/` completely. Extract:
-- Concrete requirements (must have, should have)
-- Acceptance criteria and tests
-- Technical constraints
+Before spawning the team, read all specs and identify:
+- The distinct layers/modules involved
+- Key requirements and constraints
 - Dependencies between specs
 
-## 2. Analyze Existing Code
+## Phase 2: Spawn Planning Team
 
-Search the codebase to understand current state:
-- What's already implemented?
-- Current architecture and patterns
-- Reusable components
-- Where do changes need to go?
+Create an agent team based on the layers/modules identified:
 
-## 3. Gap Analysis
+```
+Create an agent team to plan implementation for these specs.
+Spawn teammates based on the layers involved, plus a devil's advocate.
 
-For each requirement, determine:
-- **Done**: Already implemented and tested
-- **Partial**: Partially implemented, needs completion
-- **Missing**: Not implemented at all
-- **Blocked**: Depends on something not yet built
+Example for a typical web app:
+1. **Frontend Planner** - Owns UI/UX implementation:
+   - Component structure
+   - State management
+   - User interactions
+   - Styling approach
 
-## 4. Generate Staged Tasks
+2. **Backend Planner** - Owns API/service implementation:
+   - Endpoint design
+   - Data flow
+   - Business logic
+   - Error handling
 
-Create tasks grouped into STAGES. Each stage represents a logical milestone that, when complete, should be squashed into a single commit.
+3. **Data Planner** - Owns data layer:
+   - Schema changes
+   - Migrations
+   - Query patterns
+   - Data validation
 
-Tasks within a stage:
-- Atomic - completable in one focused session
-- Testable - has clear verification
-- Affects 1-3 files typically
-- Minimal dependencies
+4. **Devil's Advocate** - Challenges the architecture:
+   - "This is overengineered for the requirements"
+   - "What happens when X fails?"
+   - "Why not use existing pattern Y?"
+   - "This will be hard to test/maintain"
 
-**Bad task**: "Implement authentication"
-**Good task**: "Add password validation function with min length check"
+   Rules for Devil's Advocate:
+   - Must articulate WHY something is problematic
+   - Must propose a concrete alternative
+   - Must back down when concern is adequately addressed
+   - Goal is better architecture, not blocking progress
 
-## 5. Prioritize
+Adjust team composition based on actual project structure.
+For a CLI tool: maybe Parser, Core Logic, Output Formatting.
+For a mobile app: maybe UI, State, Network, Storage.
+```
 
-Order stages by:
-1. **Critical path** - What blocks other work?
-2. **Dependencies** - What must be built first?
-3. **Risk** - Tackle unknowns early
-4. **Value** - Core functionality before nice-to-haves
+## Phase 3: Team Analysis
 
-## 6. Write Plan
+Each teammate analyzes their layer:
 
-Create `.golem/IMPLEMENTATION_PLAN.md`:
+### Layer Planners investigate:
+- What existing code can we reuse?
+- What new components are needed?
+- What's the gap between spec and current state?
+- How does my layer integrate with others?
+- What order should tasks be done?
+
+### Devil's Advocate challenges:
+- Is this architecture too complex?
+- Are there simpler patterns we should use?
+- What are the failure modes?
+- Will this be maintainable?
+- Are we gold-plating?
+
+## Phase 4: Cross-Layer Synthesis
+
+After individual analysis:
+1. Teammates share their proposed tasks
+2. Identify dependencies between layers
+3. Devil's advocate challenges integration points
+4. Resolve conflicts and simplify where possible
+5. Agree on stage boundaries
+
+## Phase 5: Generate Plan
+
+Synthesize team findings into `.golem/IMPLEMENTATION_PLAN.md`:
 
 ```markdown
 # Implementation Plan
@@ -100,10 +133,15 @@ Based on: .golem/specs/*.md
 - Completed: 0
 - Current: Stage 1
 
+## Architecture Decisions
+{Key decisions from team discussion}
+{What the Devil's Advocate challenged and how it was resolved}
+
 ---
 
 ## Stage 1: {Stage Name}
 Commit message: {type}({scope}): {description for squash commit}
+Owner: {which layer this primarily affects}
 
 ### [ ] 1.1. {Task title}
 Files: {expected files}
@@ -126,24 +164,42 @@ Files: {files}
 Notes: {notes}
 
 ...
+
+---
+
+## Risks & Mitigations
+{What the Devil's Advocate identified as risks}
+{How we plan to mitigate them}
 ```
 
-## 7. Sync Status
+## Phase 6: Cleanup & Sync
 
-Update ticket status:
-```bash
-golem-api ticket:status $TICKET_ID planning --note "Implementation plan created with N stages"
-```
+1. Clean up the agent team
+2. Update ticket status:
+   ```bash
+   golem-api ticket:status $TICKET_ID planning --note "Implementation plan created with N stages"
+   ```
+3. Show next steps:
+   ```
+   Plan complete! Next steps:
+   1. Review .golem/IMPLEMENTATION_PLAN.md
+   2. Run /golem:build to start building
+   ```
 
 </process>
 
 <success_criteria>
 - [ ] All specs analyzed
+- [ ] Agent team explored from multiple layer perspectives
+- [ ] Devil's advocate challenged architecture
 - [ ] Gap analysis completed
 - [ ] Tasks grouped into logical stages
 - [ ] Each task is atomic and testable
 - [ ] Dependencies mapped correctly
+- [ ] Architecture decisions documented
+- [ ] Risks identified and mitigated
 - [ ] .golem/IMPLEMENTATION_PLAN.md written
+- [ ] Team cleaned up
 - [ ] No code changes made (planning only)
 </success_criteria>
 
@@ -151,6 +207,8 @@ golem-api ticket:status $TICKET_ID planning --note "Implementation plan created 
 - Do NOT implement anything in planning mode
 - Do NOT modify source code
 - ONLY create/update .golem/IMPLEMENTATION_PLAN.md
-- Stages should represent logical milestones
-- Each stage gets squashed to one commit when complete
+- The Devil's Advocate must actively challenge, not just observe
+- Document architecture decisions so we remember WHY
+- Document risks so we're prepared for them
+- Clean up the team when done
 </important>
